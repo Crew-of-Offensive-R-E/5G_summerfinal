@@ -32,10 +32,32 @@ def _has_tls_config(text):
     return False
 
 
+def _is_replicaset(text):
+    """mongod.conf에 replication.replSetName이 설정되어 있는지 확인한다."""
+    in_replication = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped and not line.startswith((" ", "\t")) and stripped.endswith(":"):
+            in_replication = stripped == "replication:"
+            continue
+        if in_replication and stripped.startswith("replSetName:"):
+            val = stripped.split(":", 1)[1].strip().strip("'\"")
+            if val:
+                return True
+    return False
+
+
 def check(**_kw):
     text = read_text(MONGOD_CONF)
     if text is None:
         return result(CODE, TITLE, NA, "mongod.conf 없음(미설치)")
+
+    # 단일 노드(standalone)는 내부 인증 해당 없음
+    if not _is_replicaset(text):
+        return result(CODE, TITLE, NA,
+                      "단일 노드(레플리카셋 미구성) — 내부 인증 해당 없음")
 
     findings = []
 

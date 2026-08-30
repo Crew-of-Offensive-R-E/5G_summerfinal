@@ -1,4 +1,9 @@
-"""U-02 비밀번호 관리정책 설정 조치."""
+"""U-02 비밀번호 관리정책 설정 조치.
+
+PAM 설정은 pam-auth-update 프로필 방식으로 적용한다.
+U-03 등 다른 조치가 pam-auth-update --force 를 호출해도
+프로필이 등록되어 있으므로 common-password 재생성 시 설정이 유지된다.
+"""
 
 import re
 from pathlib import Path
@@ -11,6 +16,8 @@ from fix_common import (
     read_text,
     backup_file,
     write_text,
+    command_exists,
+    run_command,
     glob_existing,
     summarize,
 )
@@ -30,6 +37,20 @@ PWQUALITY_VALUES = {
     "lcredit": "-1",
     "ocredit": "-1",
 }
+
+# pam-auth-update 프로필 (common-password 직접 편집 대신 사용)
+# pam_pwquality 프로필은 Ubuntu 기본 프로필에 이미 포함되어 있으므로
+# pam_pwhistory 프로필만 추가 등록한다.
+PROFILE_PWHISTORY = "/usr/share/pam-configs/kisa_pwhistory"
+
+PROFILE_PWHISTORY_TEXT = """\
+Name: KISA pam_pwhistory password history
+Default: yes
+Priority: 510
+Password-Type: Primary
+Password:
+\trequired pam_pwhistory.so remember=4 enforce_for_root use_authtok
+"""
 
 
 def _module_exists(name):
@@ -84,6 +105,7 @@ def _set_login_defs(text):
 
 
 def _set_common_password(text):
+    """pam-auth-update 미설치 시 직접 편집 폴백."""
     active_module = re.compile(
         r"^\s*password\s+\S+\s+.*pam_(?:pwquality|pwhistory)\.so\b",
         re.IGNORECASE,
@@ -148,6 +170,46 @@ def _restore(originals):
             write_text(path, text)
 
 
+def _apply_pam_profiles(originals, backups):
+    """pam-auth-update 프로필 방식으로 common-password 설정."""
+    originals[PROFILE_PWHISTORY] = read_text(PROFILE_PWHISTORY)
+    # common-password 도 pam-auth-update 가 재생성하므로 백업
+    for path in glob_existing(["/etc/pam.d/common-*"]):
+        if path not in originals:
+            originals[path] = read_text(path)
+
+    old = originals[PROFILE_PWHISTORY]
+    if old is not None:
+        backup = backup_file(PROFILE_PWHISTORY)
+        if backup:
+            backups.append(backup)
+
+    if not write_text(PROFILE_PWHISTORY, PROFILE_PWHISTORY_TEXT):
+        return False, "pwhistory 프로필 쓰기 실패"
+
+    code, _, error = run_command(
+        [
+            "env", "DEBIAN_FRONTEND=noninteractive",
+            "pam-auth-update", "--force", "--enable",
+            "kisa_pwhistory",
+        ],
+        timeout=120,
+    )
+    if code != 0:
+        return False, f"pam-auth-update 실패: {error}"
+    return True, ""
+
+
+def _apply_pam_direct(originals, backups):
+    """pam-auth-update 미설치 시 common-password 직접 편집 폴백."""
+    common_new = _set_common_password(originals[COMMON_PASSWORD])
+    if common_new is None:
+        return False, "common-password의 pam_unix.so 위치 확인 필요"
+    if not write_text(COMMON_PASSWORD, common_new):
+        return False, "common-password 쓰기 실패"
+    return True, ""
+
+
 def fix(dry_run=False):
     if _good():
         return None
@@ -170,18 +232,6 @@ def fix(dry_run=False):
     if originals[COMMON_PASSWORD] is None or originals[LOGIN_DEFS] is None:
         return result(CODE, TITLE, FAILED, "PAM 또는 login.defs 파일 읽기 실패")
 
-    common_new = _set_common_password(originals[COMMON_PASSWORD])
-    if common_new is None:
-        return result(CODE, TITLE, MANUAL, "common-password의 pam_unix.so 위치 확인 필요")
-    updates = {
-        COMMON_PASSWORD: common_new,
-        LOGIN_DEFS: _set_login_defs(originals[LOGIN_DEFS]),
-    }
-    for path in _pwquality_paths():
-        updates[path] = _set_pwquality(
-            originals[path] or "", ensure_all=(path == PWQUALITY)
-        )
-
     if dry_run:
         return result(
             CODE, TITLE, FIXED,
@@ -197,10 +247,28 @@ def fix(dry_run=False):
             return result(CODE, TITLE, FAILED, f"백업 실패: {path}")
         backups.append(backup)
 
+    # pwquality.conf, login.defs 직접 편집
+    updates = {
+        LOGIN_DEFS: _set_login_defs(originals[LOGIN_DEFS]),
+    }
+    for path in _pwquality_paths():
+        updates[path] = _set_pwquality(
+            originals[path] or "", ensure_all=(path == PWQUALITY)
+        )
     for path, content in updates.items():
         if not write_text(path, content):
             _restore(originals)
             return result(CODE, TITLE, FAILED, f"쓰기 실패로 원본 복원: {path}")
+
+    # common-password: pam-auth-update 프로필 방식 우선, 미설치 시 직접 편집
+    if command_exists("pam-auth-update"):
+        ok, err_msg = _apply_pam_profiles(originals, backups)
+    else:
+        ok, err_msg = _apply_pam_direct(originals, backups)
+
+    if not ok:
+        _restore(originals)
+        return result(CODE, TITLE, FAILED, f"{err_msg} — 원본 복원")
 
     if not _good():
         _restore(originals)
