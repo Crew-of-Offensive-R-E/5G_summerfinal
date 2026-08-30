@@ -1,0 +1,55 @@
+{
+  "profile": {
+    "name": "open5gs-single-node-lab",
+    "target_os": "Ubuntu 22.04",
+    "description": "VMware Open5GS 5G SA Core + MongoDB single-node lab",
+    "confirmed": true
+  },
+  "u39": {
+    "nfs_required": false
+  },
+  "u40": {
+    "nfs_required": false,
+    "web_upload_dirs": [
+      "/var/www/html/upload",
+      "/var/www/uploads"
+    ],
+    "follow_upload_symlinks": false
+  },
+  "u41": {
+    "autofs_required": false
+  },
+  "u42": {
+    "allowed_rpc_services": []
+  },
+  "u43": {
+    "nis_required": false
+  },
+  "u44": {
+    "tftp_pxe_required": false,
+    "talk_required": false
+  },
+  "u45": {
+    "auto_upgrade": true
+  },
+  "u49": {
+    "auto_upgrade": true
+  },
+  "u64": {
+    "enable_unattended_security_updates": true
+  },
+  "u65": {
+    "ntp_servers": [
+      "ntp.ubuntu.com"
+    ],
+    "enable_service": true
+  },
+  "u66": {
+    "logging_backend": "rsyslog",
+    "enable_service": true
+  },
+  "u50": {
+    "zone_transfer_mode": "deny",
+    "secondary_dns": []
+  }
+}
